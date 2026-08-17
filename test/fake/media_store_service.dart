@@ -28,6 +28,12 @@ class FakeMediaStoreService extends Fake implements MediaStoreService {
   }
 
   @override
+  Future<List<int>> checkObsoleteByPath(Map<int?, String?> knownPathById) async {
+    if (latency != null) await Future.delayed(latency!);
+    return [];
+  }
+
+  @override
   Future<int?> getGeneration() async {
     if (latency != null) await Future.delayed(latency!);
     return 0;
