@@ -22,10 +22,10 @@ jobs:
       - name: Flutter tests
         run: flutter test
       - name: Build debug APK
-        run: flutter build apk --debug
+        run: flutter build apk --debug -t lib/main_libre.dart --flavor libre
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: aves-media-enhanced-debug
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          path: build/app/outputs/flutter-apk/app-libre-debug.apk
           if-no-files-found: error
