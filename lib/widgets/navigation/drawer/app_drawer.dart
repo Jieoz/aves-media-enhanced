@@ -5,11 +5,13 @@ import 'package:aves/model/settings/settings.dart';
 import 'package:aves/model/source/album.dart';
 import 'package:aves/model/source/collection_lens.dart';
 import 'package:aves/model/source/collection_source.dart';
+import 'package:aves/model/source/media_store_source.dart';
 import 'package:aves/model/source/location/country.dart';
 import 'package:aves/model/source/location/place.dart';
 import 'package:aves/model/source/tag.dart';
 import 'package:aves/ref/locales.dart';
 import 'package:aves/services/common/services.dart';
+import 'package:aves/services/log_service.dart';
 import 'package:aves/theme/durations.dart';
 import 'package:aves/theme/icons.dart';
 import 'package:aves/utils/android_file_utils.dart';
@@ -32,6 +34,8 @@ import 'package:aves/widgets/navigation/drawer/page_nav_tile.dart';
 import 'package:aves/widgets/navigation/drawer/tile.dart';
 import 'package:aves/widgets/navigation/nav_item.dart';
 import 'package:aves/widgets/settings/settings_page.dart';
+import 'package:aves/widgets/stream/stream_list_page.dart';
+import 'package:aves/widgets/aves_app.dart';
 import 'package:aves_model/aves_model.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
@@ -104,10 +108,15 @@ class _AppDrawerState extends State<AppDrawer> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == .resumed && _profileSwitchPermissionRequested) {
-      _profileSwitchPermissionRequested = false;
-      _initProfileSwitchFuture();
-      setState(() {});
+    switch (state) {
+      case .resumed:
+        if (_profileSwitchPermissionRequested) {
+          _profileSwitchPermissionRequested = false;
+          _initProfileSwitchFuture();
+          setState(() {});
+        }
+      default:
+        break;
     }
   }
 
@@ -248,6 +257,72 @@ class _AppDrawerState extends State<AppDrawer> with WidgetsBindingObserver {
                     style: drawerButtonStyle,
                     icon: const Icon(AIcons.settings),
                     label: Text(l10n.drawerSettingsButton),
+                  ),
+                  OutlinedButton.icon(
+                    key: const Key('drawer-stream-button'),
+                    onPressed: () => goTo(StreamListPage.routeName, (_) => const StreamListPage()),
+                    style: drawerButtonStyle,
+                    icon: const Icon(AIcons.stream),
+                    label: const Text('流媒体'),
+                  ),
+                  OutlinedButton.icon(
+                    key: const Key('drawer-rescan-button'),
+                    onPressed: () {
+                      final source = context.read<CollectionSource>();
+                      if (source is MediaStoreSource) {
+                        source.reloadAll();
+                        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                          const SnackBar(
+                            content: Text('正在重新扫描媒体库…'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      }
+                    },
+                    style: drawerButtonStyle,
+                    icon: const Icon(AIcons.refresh),
+                    label: const Text('重新扫描媒体库'),
+                  ),
+                  OutlinedButton.icon(
+                    key: const Key('drawer-allfiles-button'),
+                    onPressed: () async {
+                      final granted = await AvesApp.requestAllFilesAccess(context);
+                      if (!context.mounted) return;
+                      if (granted) {
+                        final source = context.read<CollectionSource>();
+                        if (source is MediaStoreSource) {
+                          source.reloadAll();
+                        }
+                      }
+                      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                        SnackBar(
+                          content: Text(granted ? '已获得「管理所有文件」权限，正在重建媒体库…' : '未授予「管理所有文件」权限'),
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                    style: drawerButtonStyle,
+                    icon: const Icon(AIcons.storageMain),
+                    label: const Text('授权管理所有文件'),
+                  ),
+                  OutlinedButton.icon(
+                    key: const Key('drawer-export-log-button'),
+                    onPressed: () async {
+                      await LogService.instance.copyToClipboard();
+                      final path = await LogService.instance.exportToFile();
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                        SnackBar(
+                          content: Text(path != null
+                              ? '调试日志已导出（$path），并已复制到剪贴板'
+                              : '调试日志已复制到剪贴板（写入文件失败）'),
+                          duration: const Duration(seconds: 4),
+                        ),
+                      );
+                    },
+                    style: drawerButtonStyle,
+                    icon: const Icon(AIcons.info),
+                    label: const Text('导出调试日志'),
                   ),
                 ],
               ),

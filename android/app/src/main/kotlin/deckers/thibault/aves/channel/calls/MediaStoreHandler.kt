@@ -22,6 +22,7 @@ class MediaStoreHandler(private val context: Context) : MethodCallHandler {
         when (call.method) {
             "checkObsoleteContentIds" -> ioScope.launch { safe(call, result, ::checkObsoleteContentIds) }
             "checkObsoletePaths" -> ioScope.launch { safe(call, result, ::checkObsoletePaths) }
+            "checkObsoleteByPath" -> ioScope.launch { safe(call, result, ::checkObsoleteByPath) }
             "getChangedUris" -> ioScope.launch { safe(call, result, ::getChangedUris) }
             "getGeneration" -> ioScope.launch { safe(call, result, ::getGeneration) }
             "scanFile" -> ioScope.launch { safe(call, result, ::scanFile) }
@@ -45,6 +46,15 @@ class MediaStoreHandler(private val context: Context) : MethodCallHandler {
             return
         }
         result.success(MediaStoreImageProvider().checkObsoletePaths(context, knownPathById))
+    }
+
+    private fun checkObsoleteByPath(call: MethodCall, result: MethodChannel.Result) {
+        val knownPathById = call.argument<Map<Number?, String?>>("knownPathById")?.mapKeys { it.key?.toLong() }
+        if (knownPathById == null) {
+            result.error("checkObsoleteByPath-args", "missing arguments", null)
+            return
+        }
+        result.success(MediaStoreImageProvider().checkObsoleteByMissingPath(context, knownPathById))
     }
 
     private fun getChangedUris(call: MethodCall, result: MethodChannel.Result) {

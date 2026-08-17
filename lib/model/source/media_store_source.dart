@@ -56,6 +56,18 @@ class MediaStoreSource extends CollectionSource {
     );
   }
 
+  /// custom build: full reload of all entries from the Media Store.
+  /// Used by the drawer action "重新扫描媒体库" to reconcile the catalog with
+  /// external changes (e.g. files moved by other apps) that may not be
+  /// notified by the system.
+  Future<void> reloadAll() async {
+    await reportService.log('$runtimeType full reload requested by user');
+    _essentialLoader ??= _loadEssentials();
+    await _essentialLoader;
+    await updateGeneration();
+    await _loadEntries(loadTopEntriesFirst: false);
+  }
+
   Future<void> _loadEssentials() async {
     final stopwatch = Stopwatch()..start();
     state = SourceState.loading;
@@ -120,6 +132,12 @@ class MediaStoreSource extends CollectionSource {
     final knownDateByContentId = Map.fromEntries(knownLiveEntries.map((entry) => MapEntry(entry.contentId, entry.dateModifiedMillis)));
     final knownContentIds = knownDateByContentId.keys.toList();
     final removedContentIds = (await mediaStoreService.checkObsoleteContentIds(knownContentIds)).toSet();
+    // also drop entries whose file no longer exists on disk (e.g. deleted by another
+    // app). Media Store may not have noticed the deletion yet, so the content-id check
+    // above would miss it. Entries without a known path are skipped harmlessly.
+    final knownPathByContentId = Map.fromEntries(knownLiveEntries.map((entry) => MapEntry(entry.contentId, entry.path)));
+    final missingPathIds = (await mediaStoreService.checkObsoleteByPath(knownPathByContentId)).toSet();
+    removedContentIds.addAll(missingPathIds);
     if (topEntries.isNotEmpty) {
       final removedTopEntries = topEntries.where((entry) => removedContentIds.contains(entry.contentId));
       await removeEntries(removedTopEntries.map((entry) => entry.uri).toSet(), includeTrash: false);
@@ -321,37 +339,46 @@ class MediaStoreSource extends CollectionSource {
     final tempUris = <String>{};
     final newEntries = <AvesEntry>{}, entriesToRefresh = <AvesEntry>{};
     final existingDirectories = <String>{};
-    for (final kv in changedUriByContentId.entries) {
-      final contentId = kv.key;
-      final uri = kv.value;
-      final sourceEntry = await mediaFetchService.getEntry(uri, null);
-      if (sourceEntry != null) {
-        var isSourceEntryUsed = false;
-        final existingEntry = allEntries.firstWhereOrNull((entry) => entry.contentId == contentId);
-        // compare paths because some apps move files without updating their `last modified date`
-        if (existingEntry == null || (sourceEntry.dateModifiedMillis ?? 0) > (existingEntry.dateModifiedMillis ?? 0) || sourceEntry.path != existingEntry.path) {
-          final newPath = sourceEntry.path;
-          final volume = newPath != null ? androidFileUtils.getStorageVolume(newPath) : null;
-          if (volume != null) {
-            if (existingEntry != null) {
-              entriesToRefresh.add(existingEntry);
-            } else if (_canAnalyze) {
-              // it can discover new entries only if it can analyze them
-              sourceEntry.id = localMediaDb.nextId;
-              newEntries.add(sourceEntry);
-              isSourceEntryUsed = true;
+    // custom build: fetch entries with bounded concurrency so a bulk change
+    // (e.g. unhiding many videos at once) completes quickly instead of doing
+    // hundreds of sequential round-trips that keep the app busy for a long time.
+    const _maxConcurrentFetch = 6;
+    final uriItems = changedUriByContentId.entries.toList();
+    for (var i = 0; i < uriItems.length; i += _maxConcurrentFetch) {
+      final chunk = uriItems.sublist(i, i + _maxConcurrentFetch);
+      final fetched = await Future.wait(chunk.map((kv) => mediaFetchService.getEntry(kv.value, null)));
+      for (var j = 0; j < chunk.length; j++) {
+        final contentId = chunk[j].key;
+        final uri = chunk[j].value;
+        final sourceEntry = fetched[j];
+        if (sourceEntry != null) {
+          var isSourceEntryUsed = false;
+          final existingEntry = allEntries.firstWhereOrNull((entry) => entry.contentId == contentId);
+          // compare paths because some apps move files without updating their `last modified date`
+          if (existingEntry == null || (sourceEntry.dateModifiedMillis ?? 0) > (existingEntry.dateModifiedMillis ?? 0) || sourceEntry.path != existingEntry.path) {
+            final newPath = sourceEntry.path;
+            final volume = newPath != null ? androidFileUtils.getStorageVolume(newPath) : null;
+            if (volume != null) {
+              if (existingEntry != null) {
+                entriesToRefresh.add(existingEntry);
+              } else if (_canAnalyze) {
+                // it can discover new entries only if it can analyze them
+                sourceEntry.id = localMediaDb.nextId;
+                newEntries.add(sourceEntry);
+                isSourceEntryUsed = true;
+              }
+              final existingDirectory = existingEntry?.directory;
+              if (existingDirectory != null) {
+                existingDirectories.add(existingDirectory);
+              }
+            } else {
+              debugPrint('$runtimeType refreshUris entry=$sourceEntry is not located on a known storage volume. Will retry soon...');
+              tempUris.add(uri);
             }
-            final existingDirectory = existingEntry?.directory;
-            if (existingDirectory != null) {
-              existingDirectories.add(existingDirectory);
-            }
-          } else {
-            debugPrint('$runtimeType refreshUris entry=$sourceEntry is not located on a known storage volume. Will retry soon...');
-            tempUris.add(uri);
           }
-        }
-        if (!isSourceEntryUsed) {
-          sourceEntry.dispose();
+          if (!isSourceEntryUsed) {
+            sourceEntry.dispose();
+          }
         }
       }
     }

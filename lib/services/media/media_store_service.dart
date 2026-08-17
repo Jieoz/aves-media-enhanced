@@ -3,13 +3,15 @@ import 'dart:async';
 import 'package:aves/model/entry/entry.dart';
 import 'package:aves/services/common/channel.dart';
 import 'package:aves/services/common/services.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 abstract class MediaStoreService {
   Future<List<int>> checkObsoleteContentIds(List<int?> knownContentIds);
 
   Future<List<int>> checkObsoletePaths(Map<int?, String?> knownPathById);
+
+  // returns content ids whose backing file no longer exists on disk
+  Future<List<int>> checkObsoleteByPath(Map<int?, String?> knownPathById);
 
   Future<List<String>> getChangedUris(int sinceGeneration);
 
@@ -53,6 +55,19 @@ class PlatformMediaStoreService implements MediaStoreService {
   }
 
   @override
+  Future<List<int>> checkObsoleteByPath(Map<int?, String?> knownPathById) async {
+    try {
+      final result = await _platform.invokeMethod('checkObsoleteByPath', <String, Object?>{
+        'knownPathById': knownPathById,
+      });
+      return (result as List).cast<int>();
+    } on PlatformException catch (e, stack) {
+      await reportService.recordError(e, stack);
+    }
+    return [];
+  }
+
+  @override
   Future<List<String>> getChangedUris(int sinceGeneration) async {
     try {
       final result = await _platform.invokeMethod('getChangedUris', <String, Object?>{
@@ -72,8 +87,6 @@ class PlatformMediaStoreService implements MediaStoreService {
     } on PlatformException catch (e, stack) {
       if (e.code != 'getGeneration-primary') {
         await reportService.recordError(e, stack);
-      } else {
-        debugPrint('$runtimeType failed to get generation with error=$e');
       }
     }
     return null;

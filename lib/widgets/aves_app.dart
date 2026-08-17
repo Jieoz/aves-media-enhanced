@@ -55,8 +55,10 @@ import 'package:equatable/equatable.dart';
 import 'package:event_bus/event_bus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations_plus/flutter_localizations_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:overlay_support/overlay_support.dart';
@@ -95,7 +97,7 @@ class AvesApp extends StatefulWidget {
   // children widgets registering as `WidgetsBinding` observers and implementing `didChangeAppLifecycleState`
   // do not receive events fast enough for time sensitive actions (like PiP when leaving by gesture to home)
   // so we use this notifier to propagate events as soon as received by the top widget `AvesApp`
-  static final ValueNotifier<AppLifecycleState> lifecycleStateNotifier = ValueNotifier(.detached);
+  static final ValueNotifier<AppLifecycleState> lifecycleStateNotifier = ValueNotifier(AppLifecycleState.detached);
 
   // do not monitor all `ModalRoute`s, which would include popup menus,
   // so that we can react to fullscreen `PageRoute`s only
@@ -168,6 +170,46 @@ class AvesApp extends StatefulWidget {
       }
     }
   }
+
+  // custom build: ask for the "All files access" special permission (Android >=11).
+  // When granted, deleting a file unlinks it right away (storage space is reclaimed
+  // immediately) and moving a file within the same volume is a fast rename.
+  // Defined as a static helper on the public [AvesApp] class so it can be triggered
+  // both automatically on first launch and manually from the drawer.
+  static Future<bool> requestAllFilesAccess(BuildContext context) async {
+    if (defaultTargetPlatform != TargetPlatform.android) return false;
+    if (device.sdkInt < 30) return false;
+    final goGrant = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('申请「所有文件访问」权限'),
+        content: const Text(
+          '授予此权限后：\n'
+          '• 删除视频立即释放存储空间（不再需要杀掉应用）\n'
+          '• 移动文件瞬间完成（同盘直接改名，不再逐字节复制）\n'
+          '• 视频截取保存更可靠\n\n'
+          '请在接下来的系统页面中，允许本应用「管理所有文件」。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('以后再说'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('去授权'),
+          ),
+        ],
+      ),
+    );
+    if (goGrant != true) return false;
+
+    // opens the system settings page for this special permission
+    await Permission.manageExternalStorage.request();
+    final status = await Permission.manageExternalStorage.status;
+    debugPrint('all files access status after request: $status');
+    return status.isGranted;
+  }
 }
 
 class _AvesAppState extends State<AvesApp> with WidgetsBindingObserver {
@@ -205,7 +247,7 @@ class _AvesAppState extends State<AvesApp> with WidgetsBindingObserver {
 
     debugPrint('start listening to app lifecycle');
     WidgetsBinding.instance.addObserver(this);
-    AvesApp.lifecycleStateNotifier.value = WidgetsBinding.instance.lifecycleState ?? .detached;
+    AvesApp.lifecycleStateNotifier.value = WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.detached;
   }
 
   @override
@@ -455,7 +497,49 @@ class _AvesAppState extends State<AvesApp> with WidgetsBindingObserver {
     unawaited(storageService.deleteTempDirectory());
     unawaited(_setupErrorReporting());
 
+    // custom build: ask for "All files access" once the first frame is built,
+    // so the navigator context is guaranteed to exist for the dialog.
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      unawaited(_promptForAllFilesAccess());
+    });
+
     debugPrint('App setup in ${stopwatch.elapsed.inMilliseconds}ms');
+  }
+
+  // custom build: ask for the "All files access" special permission (Android >=11).
+  // When granted, deleting a file unlinks it right away (storage space is reclaimed
+  // immediately) and moving a file within the same volume is a fast rename.
+  // We keep asking on every cold start until the user grants it (or is on a
+  // version that does not support it), because the whole app behaves far
+  // better with this permission: no more `.ts` renames, instant moves, and
+  // immediate storage reclamation on delete.
+  Future<void> _promptForAllFilesAccess({BuildContext? context}) async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    if (device.sdkInt < 30) return;
+    try {
+      final status = await Permission.manageExternalStorage.status;
+      if (status.isGranted) return;
+
+      // resolve a usable context: prefer an explicit one, otherwise wait for
+      // the navigator to be mounted (the app may not have built yet)
+      BuildContext? ctx = context ?? navigatorKey.currentContext;
+      var waited = 0;
+      while ((ctx == null || !ctx.mounted) && waited < 8000) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        ctx = context ?? navigatorKey.currentContext;
+        waited += 200;
+      }
+      if (ctx == null || !ctx.mounted) return;
+
+      final granted = await AvesApp.requestAllFilesAccess(ctx);
+      if (granted) {
+        // paths/permissions changed: rebuild the catalog so moves use the fast
+        // rename path and deletions reclaim space right away.
+        unawaited(_mediaStoreSource.reloadAll());
+      }
+    } catch (e, stack) {
+      debugPrint('failed to request all files access: $e\n$stack');
+    }
   }
 
   void _monitorSettings() {

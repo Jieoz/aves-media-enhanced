@@ -12,6 +12,7 @@ import android.graphics.BitmapFactory
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import androidx.annotation.RequiresApi
@@ -29,7 +30,6 @@ import deckers.thibault.aves.utils.MimeTypes.extensionFor
 import deckers.thibault.aves.utils.MimeTypes.isHeic
 import deckers.thibault.aves.utils.MimeTypes.isImage
 import deckers.thibault.aves.utils.MimeTypes.isVideo
-import deckers.thibault.aves.utils.PermissionManager
 import deckers.thibault.aves.utils.StorageUtils
 import deckers.thibault.aves.utils.StorageUtils.PathSegments
 import deckers.thibault.aves.utils.StorageUtils.ensureTrailingSeparator
@@ -148,6 +148,26 @@ class MediaStoreImageProvider : ImageProvider() {
         check(context, IMAGE_CONTENT_URI)
         check(context, VIDEO_CONTENT_URI)
         return knownContentIds.subtract(foundContentIds).filterNotNull().toList()
+    }
+
+    // Return the content ids whose backing file no longer exists on disk. This catches
+    // entries deleted by other apps that Media Store has not indexed away yet, which
+    // `checkObsoleteContentIds` (based purely on content ids) would otherwise miss.
+    // Entries without a known path are skipped (we cannot tell whether the file is gone).
+    // We only trust this when the app has All-files access: without it the stored paths
+    // are unreliable, so a missing path must not be taken as proof the file is gone.
+    fun checkObsoleteByMissingPath(context: Context, knownPathById: Map<Long?, String?>): List<Long> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+            return emptyList()
+        }
+        val obsoleteIds = ArrayList<Long>()
+        for ((id, path) in knownPathById) {
+            if (id == null || path == null) continue
+            if (!File(path).exists()) {
+                obsoleteIds.add(id)
+            }
+        }
+        return obsoleteIds
     }
 
     fun checkObsoletePaths(context: Context, knownPathById: Map<Long?, String?>): List<Long> {
@@ -414,7 +434,23 @@ class MediaStoreImageProvider : ImageProvider() {
 
         try {
             Log.d(LOG_TAG, "delete [file exists=$fileExists] content at uri=$uri path=$path")
-            if (contextWrapper.contentResolver.delete(uri, null, null) > 0) return
+            if (contextWrapper.contentResolver.delete(uri, null, null) > 0) {
+                // the Media Store may defer the actual file removal to an idle pass,
+                // so try to unlink the file right now; otherwise the storage space
+                // is only reclaimed at an arbitrary later time
+                if (path != null && file.exists()) {
+                    try {
+                        if (StorageUtils.canEditByFile(contextWrapper, path)) {
+                            file.delete()
+                        } else {
+                            StorageUtils.getDocumentFile(contextWrapper, path, uri)?.delete()
+                        }
+                    } catch (e: Exception) {
+                        Log.w(LOG_TAG, "failed to unlink file at path=$path after content delete", e)
+                    }
+                }
+                return
+            }
 
             if (hasEntry(contextWrapper, uri) || file.exists()) {
                 throw Exception("failed to delete row from content provider")
@@ -468,7 +504,7 @@ class MediaStoreImageProvider : ImageProvider() {
                 targetDirDocFile = StorageUtils.createDirectoryDocIfAbsent(activity, targetDir)
                 if (!File(targetDir).exists()) {
                     // download subdirectories can be created later by Media Store insertion
-                    if (!StorageUtils.isInDownloadPath(activity, targetDir)) {
+                    if (!isDownloadSubdir(activity, targetDir)) {
                         callback.onFailure(Exception("failed to create directory at path=$targetDir"))
                         return
                     }
@@ -481,11 +517,6 @@ class MediaStoreImageProvider : ImageProvider() {
 
                 val sourceUri = entry.uri
                 val sourcePath = entry.storagePath
-
-                var desiredName: String? = null
-                if (trashed) {
-                    entry.path?.let { desiredName = File(it).name }
-                }
 
                 val result: FieldMap = hashMapOf(
                     "uri" to sourceUri.toString(),
@@ -535,7 +566,11 @@ class MediaStoreImageProvider : ImageProvider() {
                                     sourceUri = sourceUri,
                                     targetDir = effectiveTargetDir,
                                     targetDirDocFile = targetDirDocFile,
-                                    desiredName = desiredName ?: sourceFile?.name ?: sourceUri.lastPathSegment ?: createTimeStampFileName(),
+                                    // preserve the source file name (and thus its extension) on move.
+                                    // In scoped storage we only have a content uri, so fall back to the
+                                    // Media Store DISPLAY_NAME (readable without special permission) before
+                                    // the numeric content id, so the extension is never lost (no `.ts`).
+                                    desiredName = (if (trashed) entry.path?.let { File(it).name } else sourceFile?.name ?: getDisplayName(activity, sourceUri) ?: sourceUri.lastPathSegment) ?: createTimeStampFileName(),
                                     nameConflictStrategy = nameConflictStrategy,
                                     mimeType = mimeType,
                                     copy = copy,
@@ -567,7 +602,13 @@ class MediaStoreImageProvider : ImageProvider() {
         toBin: Boolean,
     ): FieldMap {
         val sourcePath = sourceFile?.path
-        val sourceExtension = sourceFile?.extension
+        // Always derive the target extension from the SOURCE FILE NAME, which carries the
+        // real extension in every access mode (a direct file path, or — via the display-name
+        // fallback in `moveMultiple` — a content uri). Falling back to the MIME type here is
+        // exactly what renamed `video.mp4` to `video.ts` when Media Store misdetected the
+        // stream as `video/mp2t` (a frequent case for clips produced by other apps).
+        val desiredExtension = desiredName.substringAfterLast(".", "")
+        val sourceExtension = if (desiredExtension.isNotEmpty()) desiredExtension else sourceFile?.extension
         val sourceDir = sourceFile?.parent?.let { ensureTrailingSeparator(it) }
         if (sourceDir == targetDir && !(copy && nameConflictStrategy == NameConflictStrategy.RENAME)) {
             // nothing to do unless it's a renamed copy
@@ -589,6 +630,61 @@ class MediaStoreImageProvider : ImageProvider() {
         )
         val targetNameWithoutExtension = resolution.nameWithoutExtension ?: return skippedFieldMap
 
+        // fast path: an instant same-volume rename when we have direct file
+        // system access on both ends, instead of copying the whole file and
+        // deleting the original (which is slow for large videos)
+        if (!copy && !toBin && sourceFile != null && !StorageUtils.isInVault(activity, targetDir)) {
+            val sourceDirPath = sourceFile.parent
+            if (sourceDirPath != null &&
+                StorageUtils.canEditByFile(activity, sourceDirPath) &&
+                StorageUtils.canEditByFile(activity, targetDir)
+            ) {
+                val sourceVolume = StorageUtils.getVolumePath(activity, sourceDirPath)
+                val targetVolume = StorageUtils.getVolumePath(activity, targetDir)
+                if (sourceVolume != null && sourceVolume == targetVolume) {
+                    val targetFile = File(targetDir, targetNameWithoutExtension + extensionFor(mimeType, sourceExtension))
+                    if (!targetFile.exists() && sourceFile.renameTo(targetFile)) {
+                        Log.d(LOG_TAG, "move [fast rename] from path=$sourcePath to path=${targetFile.path}")
+                        // verify the rename actually produced a complete file before we
+                        // touch the source entry; a partial/corrupt rename must roll back
+                        // to the source instead of being reported as a success.
+                        val renameComplete = targetFile.exists() && targetFile.length() == sourceFile.length()
+                        if (!renameComplete) {
+                            Log.w(LOG_TAG, "rename incomplete at path=${targetFile.path}, rolling back to path=$sourcePath")
+                            try {
+                                targetFile.renameTo(sourceFile)
+                            } catch (_: Exception) {
+                            }
+                            // fall through to the copy+delete branch below
+                        } else {
+                        // Scan the new path FIRST and only drop the obsolete Media Store
+                        // entry once the new file is actually indexed. This keeps the
+                        // operation atomic: if scanning fails we roll the rename back so
+                        // the source (and its Media Store entry) stay intact, instead of
+                        // leaving a dangling entry pointing at a moved file.
+                        try {
+                            val newFields = scanNewPath(activity, targetFile.path, mimeType)
+                            // drop the obsolete source entry from Media Store. The file is
+                            // already gone (renamed), so we only remove the index row, using
+                            // both the content uri and the path so it also works for file://
+                            // source uris where `hasEntry` cannot see the row.
+                            clearStaleSourceEntry(activity, sourceUri, sourcePath, mimeType)
+                            return newFields
+                        } catch (e: Exception) {
+                            Log.w(LOG_TAG, "scan failed after rename, rolling back to path=$sourcePath", e)
+                            try {
+                                targetFile.renameTo(sourceFile)
+                            } catch (_: Exception) {
+                            }
+                            throw e
+                        }
+                    }
+                }
+                    // rename failed (e.g. across filesystems): fall through to copy+delete
+                }
+            }
+        }
+
         val sourceDocFile = DocumentFileCompat.fromSingleUri(activity, sourceUri)
         val targetPath = createSingle(
             activity = activity,
@@ -608,13 +704,46 @@ class MediaStoreImageProvider : ImageProvider() {
             }
         }
 
+        // Verify the copy is complete BEFORE touching the source. A truncated copy
+        // (e.g. when the sync failure above is not harmless) must not cause us to
+        // delete the only good copy.
+        val targetFile = File(targetPath)
+        val sourceSize = sourceFile?.length() ?: -1L
+        val copyComplete = targetFile.exists() && (sourceSize < 0 || targetFile.length() == sourceSize)
+        if (!copyComplete) {
+            Log.w(LOG_TAG, "copy incomplete from path=$sourcePath to path=$targetPath, rolling back")
+            try {
+                if (targetFile.exists()) targetFile.delete()
+            } catch (_: Exception) {
+            }
+            throw Exception("copy incomplete from path=$sourcePath to path=$targetPath")
+        }
+
         if (!copy) {
-            // delete original entry
+            // Scan the new path first, then delete the source only once the new
+            // file is indexed. If scanning fails we roll back the target so the
+            // source stays intact (no data loss, no dangling entry).
+            val newFields = try {
+                scanNewPath(activity, targetPath, mimeType)
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "scan failed after copy, rolling back target at path=$targetPath", e)
+                try {
+                    if (targetFile.exists()) targetFile.delete()
+                } catch (_: Exception) {
+                }
+                throw e
+            }
+            // new copy is indexed: remove the source (best effort; if it fails the
+            // source remains and we end up with two copies, which is safe)
             try {
                 delete(activity, sourceUri, sourcePath, mimeType)
             } catch (e: Exception) {
-                Log.w(LOG_TAG, "failed to delete entry with path=$sourcePath", e)
+                Log.w(LOG_TAG, "failed to delete source after move at path=$sourcePath", e)
             }
+            // also clear any Media Store row still indexed by the (now empty) source
+            // path; this catches file:// source uris where `delete` cannot see the row.
+            clearStaleSourceEntry(activity, sourceUri, sourcePath, mimeType)
+            return newFields
         }
         return if (toBin) {
             hashMapOf(
@@ -635,7 +764,7 @@ class MediaStoreImageProvider : ImageProvider() {
         defaultExtension: String?,
         write: (OutputStream) -> Unit,
     ): String {
-        if (shouldInsertByFile(activity, targetDir)) {
+        if (StorageUtils.isInVault(activity, targetDir)) {
             return insertByFile(
                 targetDir = targetDir,
                 targetFileName = "$targetNameWithoutExtension${extensionFor(mimeType, defaultExtension)}",
@@ -643,14 +772,15 @@ class MediaStoreImageProvider : ImageProvider() {
             )
         }
 
-        if (shouldInsertByMediaStore(activity, targetDir) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            return insertByMediaStore(
-                activity = activity,
-                mimeType = mimeType,
-                targetDir = targetDir,
-                targetFileName = "$targetNameWithoutExtension${extensionFor(mimeType, defaultExtension)}",
-                write = write,
-            )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (isDownloadSubdir(activity, targetDir)) {
+                return insertByMediaStore(
+                    activity = activity,
+                    targetDir = targetDir,
+                    targetFileName = "$targetNameWithoutExtension${extensionFor(mimeType, defaultExtension)}",
+                    write = write,
+                )
+            }
         }
 
         return insertByTreeDoc(
@@ -664,18 +794,11 @@ class MediaStoreImageProvider : ImageProvider() {
         )
     }
 
-    private fun shouldInsertByFile(context: Context, targetDir: String): Boolean {
-        return StorageUtils.isInVault(context, targetDir)
-    }
-
-    private fun shouldInsertByMediaStore(context: Context, targetDir: String): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && StorageUtils.isInDownloadPath(context, targetDir)) {
-            return true
-        }
-        if (PermissionManager.isPathOnRestrictedVolume(context, targetDir)) {
-            return true
-        }
-        return false
+    private fun isDownloadSubdir(context: Context, dir: String): Boolean {
+        val volumePath = StorageUtils.getVolumePath(context, dir) ?: return false
+        val downloadDirPath = ensureTrailingSeparator(File(volumePath, Environment.DIRECTORY_DOWNLOADS).path)
+        // effective download path may have a different case
+        return dir.lowercase().startsWith(downloadDirPath.lowercase())
     }
 
     private fun insertByFile(
@@ -691,16 +814,12 @@ class MediaStoreImageProvider : ImageProvider() {
     @RequiresApi(Build.VERSION_CODES.Q)
     private fun insertByMediaStore(
         activity: Activity,
-        mimeType: String,
         targetDir: String,
         targetFileName: String,
         write: (OutputStream) -> Unit,
     ): String {
-        val volumePath = StorageUtils.getVolumePath(activity, anyPath = targetDir)
+        val volumePath = StorageUtils.getVolumePath(activity, targetDir)
         val relativePath = targetDir.substring(volumePath?.length ?: 0)
-
-        val contentUri = StorageUtils.getMediaStoreRootContentUri(activity, mimeType = mimeType, anyPath = targetDir)
-            ?: throw Exception("failed to get MediaStore root content URI for mimeType=$mimeType targetDir=$targetDir")
 
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, targetFileName)
@@ -708,7 +827,7 @@ class MediaStoreImageProvider : ImageProvider() {
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val resolver = activity.contentResolver
-        val uri = resolver.insert(contentUri, values)
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
 
         uri?.let {
             resolver.openOutputStream(uri)?.use(write)
@@ -920,6 +1039,58 @@ class MediaStoreImageProvider : ImageProvider() {
                     Log.w(LOG_TAG, "Cleared Media Store entry at uri=$newUri path=$path")
                 }
             }
+        }
+    }
+
+    // Remove the now-obsolete source Media Store entry after a move. The file is
+    // already gone (renamed away, or copied then deleted), so we only have to drop
+    // the index row. We clean both by content uri (when it is a Media Store uri)
+    // and by path (via MediaScanner), because for file:// source uris `hasEntry`
+    // cannot see the row and a bare content-resolver delete would silently do
+    // nothing, leaving a dangling entry that re-appears after a media scan.
+    // Drop the Media Store index row that used to point at the (now moved) source file.
+    // We delete by BOTH the content uri and the file path, so this also works when the
+    // source entry was a `file://` uri (where `hasEntry` cannot see the row). Without this,
+    // the source folder keeps a stale "ghost" entry after a move or in-app delete.
+    private fun clearStaleSourceEntry(activity: Activity, sourceUri: Uri, sourcePath: String?, mimeType: String) {
+        try {
+            if (hasEntry(activity, sourceUri)) {
+                activity.contentResolver.delete(sourceUri, null, null)
+            }
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "failed to delete content entry after move at uri=$sourceUri", e)
+        }
+        deleteMediaStoreRowByPath(activity, sourcePath)
+    }
+
+    // Remove Media Store rows whose `DATA` matches the given path, across both the image
+    // and video tables. Failures are logged and ignored; this is best-effort cleanup.
+    private fun deleteMediaStoreRowByPath(context: Context, path: String?) {
+        if (path == null) return
+        val sel = "${MediaStore.MediaColumns.DATA} = ?"
+        val args = arrayOf(path)
+        for (uri in arrayOf(IMAGE_CONTENT_URI, VIDEO_CONTENT_URI)) {
+            try {
+                context.contentResolver.delete(uri, sel, args)
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "failed to delete Media Store row by path=$path", e)
+            }
+        }
+    }
+
+    // Best-effort lookup of a media entry's display name (e.g. "video.mp4") from its
+    // content uri. The `DISPLAY_NAME` column is readable even under scoped storage, so
+    // this recovers the real file extension when we only hold a content uri (no direct
+    // file path) — preventing moves from renaming `video.mp4` to `video.ts`.
+    private fun getDisplayName(activity: Activity, uri: Uri): String? {
+        if (uri.scheme != ContentResolver.SCHEME_CONTENT) return null
+        return try {
+            activity.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)) else null
+            }
+        } catch (e: Exception) {
+            Log.w(LOG_TAG, "failed to get display name for uri=$uri", e)
+            null
         }
     }
 
