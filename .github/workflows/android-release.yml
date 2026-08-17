@@ -59,8 +59,25 @@ jobs:
           fi
           test -n "${SDK_ROOT}"
           test -d "${SDK_ROOT}/build-tools"
-          APKSIGNER="$(find "${SDK_ROOT}/build-tools" -type f -name apksigner | sort -V | tail -1)"
-          AAPT2="$(find "${SDK_ROOT}/build-tools" -type f -name aapt2 | sort -V | tail -1)"
+          # Prefer a known-good build-tools pair. Latest (37.x) wrappers have
+          # silently failed this step with no stdout after the path print.
+          pick_tool() {
+            local name="$1"
+            local chosen=""
+            local d
+            for d in 35.0.0 34.0.0 33.0.3; do
+              if [[ -x "${SDK_ROOT}/build-tools/${d}/${name}" ]]; then
+                chosen="${SDK_ROOT}/build-tools/${d}/${name}"
+                break
+              fi
+            done
+            if [[ -z "$chosen" ]]; then
+              chosen="$(find "${SDK_ROOT}/build-tools" -type f -name "$name" | sort -V | tail -1)"
+            fi
+            printf '%s' "$chosen"
+          }
+          APKSIGNER="$(pick_tool apksigner)"
+          AAPT2="$(pick_tool aapt2)"
           test -x "$APKSIGNER"
           test -x "$AAPT2"
           printf 'verify tools SDK_ROOT=%s APKSIGNER=%s AAPT2=%s\n' "$SDK_ROOT" "$APKSIGNER" "$AAPT2"
@@ -69,18 +86,33 @@ jobs:
           mkdir -p release-apks
           seen_abis=()
           for apk in "${apks[@]}"; do
-            "$APKSIGNER" verify --verbose --print-certs "$apk" > signer.txt
-            signer_digest="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' signer.txt | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
+            echo "verifying $(basename "$apk")"
+            "$APKSIGNER" verify --print-certs "$apk" > signer.txt 2> signer.err || {
+              echo "apksigner failed for $apk"
+              cat signer.txt signer.err
+              exit 1
+            }
+            signer_digest="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' signer.txt | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]' | head -1)"
+            printf 'signer_digest=%s\n' "$signer_digest"
+            test -n "$signer_digest"
             test "$signer_digest" = 'db3ab984c43e7468588150c2a0d9886c3701992a76a6326d7b510bbabd89866f'
             badging="$("$AAPT2" dump badging "$apk")"
-            grep -q "package: name='io.github.jieoz.avesmediaenhanced.libre'" <<<"$badging"
-            grep -q "versionName='1.0.2'" <<<"$badging"
-            abi="$(sed -n "s/.*native-code: '\([^']*\)'.*/\1/p" <<<"$badging")"
+            grep -q "package: name='io.github.jieoz.avesmediaenhanced.libre'" <<<"$badging" || {
+              echo "package name mismatch for $apk"
+              echo "$badging" | head
+              exit 1
+            }
+            grep -q "versionName='1.0.2'" <<<"$badging" || {
+              echo "versionName mismatch for $apk"
+              echo "$badging" | head
+              exit 1
+            }
+            abi="$(sed -n "s/.*native-code: '\([^']*\)'.*/\1/p" <<<"$badging" | awk 'NF{print; exit}')"
             case "$abi" in
               armeabi-v7a) expected_code=301 ;;
               arm64-v8a) expected_code=302 ;;
               x86_64) expected_code=304 ;;
-              *) echo "unexpected ABI: $abi"; exit 1 ;;
+              *) echo "unexpected ABI: [$abi]"; echo "$badging" | grep native-code; exit 1 ;;
             esac
             grep -q "versionCode='$expected_code'" <<<"$badging"
             unzip -Z1 "$apk" > apk-entries.txt
