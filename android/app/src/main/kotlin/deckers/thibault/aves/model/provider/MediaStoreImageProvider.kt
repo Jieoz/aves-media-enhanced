@@ -130,23 +130,30 @@ class MediaStoreImageProvider : ImageProvider() {
 
     fun checkObsoleteContentIds(context: Context, knownContentIds: List<Long?>): List<Long> {
         val foundContentIds = HashSet<Long>()
+        var queryFailed = false
         fun check(context: Context, contentUri: Uri) {
             val projection = arrayOf(MediaStore.MediaColumns._ID)
             try {
                 val cursor = context.contentResolver.query(contentUri, projection, null, null, null)
-                if (cursor != null) {
-                    val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
-                    while (cursor.moveToNext()) {
-                        foundContentIds.add(cursor.getLong(idColumn))
-                    }
-                    cursor.close()
+                if (cursor == null) {
+                    queryFailed = true
+                    return
                 }
+                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                while (cursor.moveToNext()) {
+                    foundContentIds.add(cursor.getLong(idColumn))
+                }
+                cursor.close()
             } catch (e: Exception) {
+                queryFailed = true
                 Log.e(LOG_TAG, "failed to get content IDs for contentUri=$contentUri", e)
             }
         }
         check(context, IMAGE_CONTENT_URI)
         check(context, VIDEO_CONTENT_URI)
+        // A failed or null query must not be treated as "every known id is gone".
+        // The difference against an empty found-set would wipe the whole catalog.
+        if (queryFailed) return emptyList()
         return knownContentIds.subtract(foundContentIds).filterNotNull().toList()
     }
 
@@ -162,9 +169,20 @@ class MediaStoreImageProvider : ImageProvider() {
         }
         val obsoleteIds = ArrayList<Long>()
         for ((id, path) in knownPathById) {
-            if (id == null || path == null) continue
-            if (!File(path).exists()) {
-                obsoleteIds.add(id)
+            if (id == null || path.isNullOrBlank()) continue
+            try {
+                val file = File(path)
+                val parent = file.parentFile
+                // An unreadable parent (unmounted volume, encoding, transient IO)
+                // is not proof the file is gone. Only treat as missing when we
+                // can actually inspect the directory, or the directory itself
+                // has been deleted.
+                if (parent != null && parent.exists() && !parent.canRead()) continue
+                if (!file.exists()) {
+                    obsoleteIds.add(id)
+                }
+            } catch (_: Exception) {
+                // A path we cannot stat is not obsolete.
             }
         }
         return obsoleteIds
@@ -172,28 +190,37 @@ class MediaStoreImageProvider : ImageProvider() {
 
     fun checkObsoletePaths(context: Context, knownPathById: Map<Long?, String?>): List<Long> {
         val obsoleteIds = ArrayList<Long>()
+        var queryFailed = false
         fun check(context: Context, contentUri: Uri) {
             val projection = arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DATA)
             try {
                 val cursor = context.contentResolver.query(contentUri, projection, null, null, null)
-                if (cursor != null) {
-                    val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
-                    val pathColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
-                    while (cursor.moveToNext()) {
-                        val id = cursor.getLong(idColumn)
-                        val path = cursor.getString(pathColumn)
-                        if (knownPathById.containsKey(id) && knownPathById[id] != path) {
-                            obsoleteIds.add(id)
-                        }
-                    }
-                    cursor.close()
+                if (cursor == null) {
+                    queryFailed = true
+                    return
                 }
+                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                val pathColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idColumn)
+                    // DATA is often null under scoped storage. A blank path is not
+                    // evidence that the file moved; treating it as a mismatch would
+                    // mark the whole library as relocated.
+                    val path = cursor.getString(pathColumn)
+                    if (path.isNullOrBlank()) continue
+                    if (knownPathById.containsKey(id) && knownPathById[id] != path) {
+                        obsoleteIds.add(id)
+                    }
+                }
+                cursor.close()
             } catch (e: Exception) {
+                queryFailed = true
                 Log.e(LOG_TAG, "failed to get content IDs for contentUri=$contentUri", e)
             }
         }
         check(context, IMAGE_CONTENT_URI)
         check(context, VIDEO_CONTENT_URI)
+        if (queryFailed) return emptyList()
         return obsoleteIds
     }
 
