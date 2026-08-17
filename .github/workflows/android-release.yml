@@ -23,10 +23,6 @@ jobs:
         run: flutter analyze
       - name: Flutter tests
         run: flutter test
-      - name: Extension regression unit tests
-        run: |
-          cd android
-          ./gradlew :app:testLibreDebugUnitTest --tests deckers.thibault.aves.utils.MimeTypesExtensionTest
       - name: Configure libre flavor
         run: |
           sed -i 's|plugins/aves_services_.*|plugins/aves_services_none|g' pubspec.yaml
@@ -47,7 +43,12 @@ jobs:
           AVES_KEY_PASSWORD: ${{ secrets.AVES_KEY_PASSWORD }}
           AVES_GOOGLE_API_KEY: NONE
         run: flutter build apk --release -t lib/main_libre.dart --flavor libre --split-per-abi
+      - name: Extension regression unit tests
+        run: |
+          test -x android/gradlew
+          (cd android && ./gradlew :app:testLibreDebugUnitTest --tests deckers.thibault.aves.utils.MimeTypesExtensionTest)
       - name: Verify release APKs
+        id: verify_apks
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -102,7 +103,7 @@ jobs:
         if: always()
         run: rm -f "$RUNNER_TEMP/aves-media-enhanced.jks"
       - name: Upload raw APKs for failed verification
-        if: failure()
+        if: failure() && steps.verify_apks.conclusion == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: aves-media-enhanced-verification-failure
