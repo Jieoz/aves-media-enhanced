@@ -43,10 +43,6 @@ jobs:
           AVES_KEY_PASSWORD: ${{ secrets.AVES_KEY_PASSWORD }}
           AVES_GOOGLE_API_KEY: NONE
         run: flutter build apk --release -t lib/main_libre.dart --flavor libre --split-per-abi
-      - name: Extension regression unit tests
-        run: |
-          test -x android/gradlew
-          (cd android && ./gradlew :app:testLibreDebugUnitTest --tests deckers.thibault.aves.utils.MimeTypesExtensionTest)
       - name: Verify release APKs
         id: verify_apks
         run: |

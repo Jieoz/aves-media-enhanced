@@ -9,6 +9,8 @@ An independent public build of Aves with Android MediaStore and file-operation e
 - Safer move/copy handling with destination verification
 - MediaStore refresh after file operations
 - Preservation of video display names/extensions
+- Fail-closed MediaStore cleanup: query failures and blank DATA columns do not wipe the catalog
+- Source file extensions win over a misdetected `video/mp2t` MIME (no more `.ts` on move/rename)
 - Android storage-access entry point
 
 This project is based on the Aves upstream source and is independently maintained. It is not an official Aves release.
