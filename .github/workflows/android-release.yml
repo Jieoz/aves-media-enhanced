@@ -47,14 +47,18 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
+          APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          AAPT2="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name aapt2 | sort -V | tail -1)"
+          test -x "$APKSIGNER"
+          test -x "$AAPT2"
           apks=(build/app/outputs/apk/libre/release/*.apk)
           test "${#apks[@]}" -eq 3
           mkdir -p release-apks
           seen_abis=()
           for apk in "${apks[@]}"; do
-            apksigner verify --verbose --print-certs "$apk" > signer.txt
+            "$APKSIGNER" verify --verbose --print-certs "$apk" > signer.txt
             grep -qi 'Signer #1 certificate SHA-256 digest: db3ab984c43e7468588150c2a0d9886c3701992a76a6326d7b510bbabd89866f' signer.txt
-            badging="$(aapt2 dump badging "$apk")"
+            badging="$("$AAPT2" dump badging "$apk")"
             grep -q "package: name='io.github.jieoz.avesmediaenhanced.libre'" <<<"$badging"
             grep -q "versionName='1.0.1'" <<<"$badging"
             abi="$(sed -n "s/.*native-code: '\([^']*\)'.*/\1/p" <<<"$badging")"
