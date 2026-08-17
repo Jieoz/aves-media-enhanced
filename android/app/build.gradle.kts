@@ -9,6 +9,7 @@ plugins {
 }
 
 val packageName = "deckers.thibault.aves"
+val applicationPackageName = "io.github.jieoz.avesmediaenhanced"
 
 // Keys
 
@@ -60,7 +61,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = packageName
+        applicationId = applicationPackageName
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

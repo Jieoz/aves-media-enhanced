@@ -15,4 +15,10 @@ This project is based on the Aves upstream source and is independently maintaine
 
 ## Build
 
-GitHub Actions builds a debug APK on pushes to `main` and manual workflow dispatch. A release build is not claimed until CI completes successfully and the resulting APK is downloaded and verified.
+GitHub Actions runs analysis and tests, then builds signed, minimized release APKs split by ABI on pushes to `main`.
+
+- Package ID: `io.github.jieoz.avesmediaenhanced.libre`
+- Architectures: `arm64-v8a`, `armeabi-v7a`, `x86_64`
+- Release signing certificate SHA-256: `DB:3A:B9:84:C4:3E:74:68:58:81:50:C2:A0:D9:88:6C:37:01:99:2A:76:A6:32:6D:7B:51:0B:BA:BD:89:86:6F`
+
+The signing key is stored only as encrypted GitHub Actions secrets. A release is published only after the exact CI artifacts are downloaded and their package, version, signer, architecture, integrity, and hashes are verified.

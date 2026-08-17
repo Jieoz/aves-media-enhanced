@@ -1,0 +1,88 @@
+name: Android release APK
+on:
+  push:
+    branches: [main]
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.0-0.3.pre'
+          channel: beta
+          cache: true
+      - name: Flutter pub get
+        run: flutter pub get
+      - name: Flutter analyze
+        run: flutter analyze
+      - name: Flutter tests
+        run: flutter test
+      - name: Configure libre flavor
+        run: |
+          sed -i 's|plugins/aves_services_.*|plugins/aves_services_none|g' pubspec.yaml
+          sed -i 's|plugins/aves_report_.*|plugins/aves_report_console|g' pubspec.yaml
+          flutter pub get
+      - name: Decode release keystore
+        env:
+          AVES_KEYSTORE_BASE64: ${{ secrets.AVES_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$AVES_KEYSTORE_BASE64"
+          printf '%s' "$AVES_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/aves-media-enhanced.jks"
+          test -s "$RUNNER_TEMP/aves-media-enhanced.jks"
+      - name: Build signed split release APKs
+        env:
+          AVES_STORE_FILE: ${{ runner.temp }}/aves-media-enhanced.jks
+          AVES_STORE_PASSWORD: ${{ secrets.AVES_STORE_PASSWORD }}
+          AVES_KEY_ALIAS: ${{ secrets.AVES_KEY_ALIAS }}
+          AVES_KEY_PASSWORD: ${{ secrets.AVES_KEY_PASSWORD }}
+          AVES_GOOGLE_API_KEY: NONE
+        run: flutter build apk --release -t lib/main_libre.dart --flavor libre --split-per-abi
+      - name: Verify release APKs
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(build/app/outputs/apk/libre/release/*.apk)
+          test "${#apks[@]}" -eq 3
+          mkdir -p release-apks
+          seen_abis=()
+          for apk in "${apks[@]}"; do
+            apksigner verify --verbose --print-certs "$apk" > signer.txt
+            grep -qi 'Signer #1 certificate SHA-256 digest: db3ab984c43e7468588150c2a0d9886c3701992a76a6326d7b510bbabd89866f' signer.txt
+            badging="$(aapt2 dump badging "$apk")"
+            grep -q "package: name='io.github.jieoz.avesmediaenhanced.libre'" <<<"$badging"
+            grep -q "versionName='1.0.1'" <<<"$badging"
+            abi="$(sed -n "s/.*native-code: '\([^']*\)'.*/\1/p" <<<"$badging")"
+            case "$abi" in
+              armeabi-v7a) expected_code=201 ;;
+              arm64-v8a) expected_code=202 ;;
+              x86_64) expected_code=204 ;;
+              *) echo "unexpected ABI: $abi"; exit 1 ;;
+            esac
+            grep -q "versionCode='$expected_code'" <<<"$badging"
+            unzip -Z1 "$apk" > apk-entries.txt
+            grep -q "^lib/$abi/" apk-entries.txt
+            if grep '^lib/' apk-entries.txt | grep -Evq "^lib/$abi/"; then
+              echo "APK contains native libraries from another ABI: $apk"
+              exit 1
+            fi
+            seen_abis+=("$abi")
+            unzip -t "$apk" >/dev/null
+            cp "$apk" "release-apks/aves-media-enhanced-1.0.1-$abi.apk"
+          done
+          test "$(printf '%s\n' "${seen_abis[@]}" | sort -u | wc -l)" -eq 3
+          (cd release-apks && sha256sum *.apk > SHA256SUMS.txt)
+      - name: Remove decoded keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/aves-media-enhanced.jks"
+      - name: Upload signed release APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: aves-media-enhanced-release
+          path: release-apks/*
+          if-no-files-found: error
