@@ -57,7 +57,8 @@ jobs:
           seen_abis=()
           for apk in "${apks[@]}"; do
             "$APKSIGNER" verify --verbose --print-certs "$apk" > signer.txt
-            grep -qi 'Signer #1 certificate SHA-256 digest: db3ab984c43e7468588150c2a0d9886c3701992a76a6326d7b510bbabd89866f' signer.txt
+            signer_digest="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' signer.txt | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')"
+            test "$signer_digest" = 'db3ab984c43e7468588150c2a0d9886c3701992a76a6326d7b510bbabd89866f'
             badging="$("$AAPT2" dump badging "$apk")"
             grep -q "package: name='io.github.jieoz.avesmediaenhanced.libre'" <<<"$badging"
             grep -q "versionName='1.0.1'" <<<"$badging"
@@ -84,6 +85,13 @@ jobs:
       - name: Remove decoded keystore
         if: always()
         run: rm -f "$RUNNER_TEMP/aves-media-enhanced.jks"
+      - name: Upload raw APKs for failed verification
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aves-media-enhanced-verification-failure
+          path: build/app/outputs/apk/libre/release/*.apk
+          if-no-files-found: error
       - name: Upload signed release APKs
         uses: actions/upload-artifact@v4
         with:
