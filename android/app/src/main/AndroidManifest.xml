@@ -33,6 +33,11 @@
         android:maxSdkVersion="29"
         tools:ignore="ScopedStorage" />
 
+    <!-- Optional user-initiated access for complete media reconciliation on Android 11+. -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
     <!-- to access media with original metadata with scoped storage (API >=29) -->
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
     <!-- to provide a foreground service type, as required from Android 14 (API 34) -->

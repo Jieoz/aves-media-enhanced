@@ -178,7 +178,7 @@ class AvesApp extends StatefulWidget {
   // both automatically on first launch and manually from the drawer.
   static Future<bool> requestAllFilesAccess(BuildContext context) async {
     if (defaultTargetPlatform != TargetPlatform.android) return false;
-    if (device.sdkInt < 30) return false;
+    if (device.androidSdkInt < 30) return false;
     final goGrant = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -497,49 +497,7 @@ class _AvesAppState extends State<AvesApp> with WidgetsBindingObserver {
     unawaited(storageService.deleteTempDirectory());
     unawaited(_setupErrorReporting());
 
-    // custom build: ask for "All files access" once the first frame is built,
-    // so the navigator context is guaranteed to exist for the dialog.
-    SchedulerBinding.instance.addPostFrameCallback((_) {
-      unawaited(_promptForAllFilesAccess());
-    });
-
     debugPrint('App setup in ${stopwatch.elapsed.inMilliseconds}ms');
-  }
-
-  // custom build: ask for the "All files access" special permission (Android >=11).
-  // When granted, deleting a file unlinks it right away (storage space is reclaimed
-  // immediately) and moving a file within the same volume is a fast rename.
-  // We keep asking on every cold start until the user grants it (or is on a
-  // version that does not support it), because the whole app behaves far
-  // better with this permission: no more `.ts` renames, instant moves, and
-  // immediate storage reclamation on delete.
-  Future<void> _promptForAllFilesAccess({BuildContext? context}) async {
-    if (defaultTargetPlatform != TargetPlatform.android) return;
-    if (device.sdkInt < 30) return;
-    try {
-      final status = await Permission.manageExternalStorage.status;
-      if (status.isGranted) return;
-
-      // resolve a usable context: prefer an explicit one, otherwise wait for
-      // the navigator to be mounted (the app may not have built yet)
-      BuildContext? ctx = context ?? navigatorKey.currentContext;
-      var waited = 0;
-      while ((ctx == null || !ctx.mounted) && waited < 8000) {
-        await Future<void>.delayed(const Duration(milliseconds: 200));
-        ctx = context ?? navigatorKey.currentContext;
-        waited += 200;
-      }
-      if (ctx == null || !ctx.mounted) return;
-
-      final granted = await AvesApp.requestAllFilesAccess(ctx);
-      if (granted) {
-        // paths/permissions changed: rebuild the catalog so moves use the fast
-        // rename path and deletions reclaim space right away.
-        unawaited(_mediaStoreSource.reloadAll());
-      }
-    } catch (e, stack) {
-      debugPrint('failed to request all files access: $e\n$stack');
-    }
   }
 
   void _monitorSettings() {

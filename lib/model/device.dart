@@ -6,6 +6,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 final Device device = Device._private();
 
 class Device {
+  late final int _androidSdkInt;
   late final String _packageName, _packageVersion, _userAgent;
   late final bool _canAuthenticateUser, _canPinShortcut, _showPinShortcutFeedback;
   late final bool _canRenderSubdivisionFlagEmojis, _canRequestMediaManagementPermission, _canRequestNotificationPermission;
@@ -42,6 +43,8 @@ class Device {
 
   bool get supportPictureInPicture => _supportPictureInPicture;
 
+  int get androidSdkInt => _androidSdkInt;
+
   Device._private();
 
   Future<void> init() async {
@@ -51,6 +54,7 @@ class Device {
     _userAgent = '$_packageName/$_packageVersion';
 
     final androidInfo = await DeviceInfoPlugin().androidInfo;
+    _androidSdkInt = androidInfo.version.sdkInt;
     _isPhysicalDevice = androidInfo.isPhysicalDevice;
     _isTelevision = androidInfo.systemFeatures.contains('android.software.leanback');
 

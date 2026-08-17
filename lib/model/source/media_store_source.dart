@@ -26,6 +26,7 @@ class MediaStoreSource extends CollectionSource {
   SourceScope _loadedScope, _targetScope;
   bool _canAnalyze = true;
   Future<void>? _essentialLoader;
+  Future<void>? _reloadFuture;
 
   @override
   set canAnalyze(bool enabled) => _canAnalyze = enabled;
@@ -60,7 +61,9 @@ class MediaStoreSource extends CollectionSource {
   /// Used by the drawer action "重新扫描媒体库" to reconcile the catalog with
   /// external changes (e.g. files moved by other apps) that may not be
   /// notified by the system.
-  Future<void> reloadAll() async {
+  Future<void> reloadAll() => _reloadFuture ??= _reloadAll().whenComplete(() => _reloadFuture = null);
+
+  Future<void> _reloadAll() async {
     await reportService.log('$runtimeType full reload requested by user');
     _essentialLoader ??= _loadEssentials();
     await _essentialLoader;
