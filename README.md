@@ -2,6 +2,8 @@
 
 An independent public build of Aves with Android MediaStore and file-operation enhancements.
 
+Current release: **1.0.4** — [download signed APKs](https://github.com/Jieoz/aves-media-enhanced/releases/tag/v1.0.4-media-enhanced).
+
 ## Current scope
 
 - Explicit MediaStore rescan entry point
@@ -16,6 +18,12 @@ An independent public build of Aves with Android MediaStore and file-operation e
 - Scoped-storage move detection via volume identity + `RELATIVE_PATH` + `DISPLAY_NAME` instead of `DATA` on Android 10+
 - Cancellable, suspending MediaScanner retries without blocking callback threads
 - Android storage-access entry point
+- Vault entries are excluded from the exported global-search suggestion source
+- Bounded incremental refresh batches and generation-watermark handoff without skipped changes
+- Android 14 selected-photo access is treated as an incomplete view, never as deletion proof
+- Same-key media requests share running work or cancel superseded queued work without orphaned Futures
+- Literal directory-prefix queries correctly escape SQLite `LIKE` wildcards
+- Image decode, GeoTIFF and Android Cursor failure paths release resources deterministically
 
 This project is based on the Aves upstream source and is independently maintained. It is not an official Aves release.
 
