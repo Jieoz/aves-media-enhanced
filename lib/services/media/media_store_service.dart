@@ -6,7 +6,7 @@ import 'package:aves/services/common/services.dart';
 import 'package:flutter/services.dart';
 
 abstract class MediaStoreService {
-  Future<List<int>> checkObsoleteContentIds(List<int?> knownContentIds);
+  Future<List<int>> checkObsoleteContentIds(Map<int?, String?> knownPathById);
 
   Future<List<int>> checkObsoletePaths(Map<int?, String?> knownPathById);
 
@@ -29,10 +29,10 @@ class PlatformMediaStoreService implements MediaStoreService {
   static final _stream = AvesStreamsChannel('deckers.thibault/aves/media_store_stream');
 
   @override
-  Future<List<int>> checkObsoleteContentIds(List<int?> knownContentIds) async {
+  Future<List<int>> checkObsoleteContentIds(Map<int?, String?> knownPathById) async {
     try {
       final result = await _platform.invokeMethod('checkObsoleteContentIds', <String, Object?>{
-        'knownContentIds': knownContentIds,
+        'knownPathById': knownPathById,
       });
       return (result as List).cast<int>();
     } on PlatformException catch (e, stack) {

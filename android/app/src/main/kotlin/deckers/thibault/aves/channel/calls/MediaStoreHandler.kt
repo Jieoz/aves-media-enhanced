@@ -31,12 +31,12 @@ class MediaStoreHandler(private val context: Context) : MethodCallHandler {
     }
 
     private fun checkObsoleteContentIds(call: MethodCall, result: MethodChannel.Result) {
-        val knownContentIds = call.argument<List<Number?>>("knownContentIds")?.map { it?.toLong() }
-        if (knownContentIds == null) {
+        val knownPathById = call.argument<Map<Number?, String?>>("knownPathById")?.mapKeys { it.key?.toLong() }
+        if (knownPathById == null) {
             result.error("checkObsoleteContentIds-args", "missing arguments", null)
             return
         }
-        result.success(MediaStoreImageProvider().checkObsoleteContentIds(context, knownContentIds))
+        result.success(MediaStoreImageProvider().checkObsoleteContentIds(context, knownPathById))
     }
 
     private fun checkObsoletePaths(call: MethodCall, result: MethodChannel.Result) {

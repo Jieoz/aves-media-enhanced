@@ -2,6 +2,9 @@ name: Android release APK
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
 concurrency:
   group: android-release-${{ github.ref }}
   cancel-in-progress: true
@@ -10,25 +13,58 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.47.0-0.3.pre'
-          channel: beta
-          cache: true
+          submodules: recursive
+      - name: Use repository-pinned Flutter SDK
+        run: |
+          set -euo pipefail
+          test -x "$GITHUB_WORKSPACE/.flutter/bin/flutter"
+          # actions/checkout fetches submodules at depth 1 without tags. Flutter
+          # then identifies this exact tagged revision as 0.0.0-unknown, which
+          # makes pub reject this repository's minimum SDK constraint.
+          git -C "$GITHUB_WORKSPACE/.flutter" fetch --force --depth=1 origin tag 3.47.0-0.3.pre
+          test "$(git -C "$GITHUB_WORKSPACE/.flutter" describe --tags --exact-match HEAD)" = '3.47.0-0.3.pre'
+          echo "$GITHUB_WORKSPACE/.flutter/bin" >> "$GITHUB_PATH"
+          if ! "$GITHUB_WORKSPACE/.flutter/bin/flutter" --version; then
+            # Some archive/filesystem combinations lose executable bits.
+            python3 scripts/repair_flutter_cache_permissions.py "$GITHUB_WORKSPACE/.flutter"
+            "$GITHUB_WORKSPACE/.flutter/bin/flutter" --version
+          fi
+          test "$("$GITHUB_WORKSPACE/.flutter/bin/flutter" --version --machine | python3 -c 'import json,sys; print(json.load(sys.stdin)["frameworkVersion"] )')" = '3.47.0-0.3.pre'
+          "$GITHUB_WORKSPACE/.flutter/bin/flutter" config --no-analytics
+          "$GITHUB_WORKSPACE/.flutter/bin/flutter" precache --android --linux
+          python3 scripts/repair_flutter_cache_permissions.py "$GITHUB_WORKSPACE/.flutter"
+      - name: Read application version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_value="$(awk '/^version:/ {print $2; exit}' pubspec.yaml)"
+          test -n "$version_value"
+          echo "APP_VERSION=${version_value%%+*}" >> "$GITHUB_ENV"
+          echo "APP_VERSION_CODE=${version_value##*+}" >> "$GITHUB_ENV"
       - name: Flutter pub get
         run: flutter pub get
       - name: Flutter analyze
         run: flutter analyze
       - name: Flutter tests
         run: flutter test
+      - name: Media reconciliation source contracts
+        run: python3 scripts/test_media_reconciliation_contract.py
       - name: Configure libre flavor
         run: |
           sed -i 's|plugins/aves_services_.*|plugins/aves_services_none|g' pubspec.yaml
           sed -i 's|plugins/aves_report_.*|plugins/aves_report_console|g' pubspec.yaml
           flutter pub get
+      - name: Android unit tests
+        working-directory: android
+        run: |
+          test -f ../lib/main_libre.dart
+          ./gradlew testLibreDebugUnitTest -Ptarget=lib/main_libre.dart --stacktrace --no-daemon
       - name: Decode release keystore
+        if: github.event_name != 'pull_request'
         env:
           AVES_KEYSTORE_BASE64: ${{ secrets.AVES_KEYSTORE_BASE64 }}
         run: |
@@ -36,6 +72,7 @@ jobs:
           printf '%s' "$AVES_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/aves-media-enhanced.jks"
           test -s "$RUNNER_TEMP/aves-media-enhanced.jks"
       - name: Build signed split release APKs
+        if: github.event_name != 'pull_request'
         env:
           AVES_STORE_FILE: ${{ runner.temp }}/aves-media-enhanced.jks
           AVES_STORE_PASSWORD: ${{ secrets.AVES_STORE_PASSWORD }}
@@ -44,6 +81,7 @@ jobs:
           AVES_GOOGLE_API_KEY: NONE
         run: flutter build apk --release -t lib/main_libre.dart --flavor libre --split-per-abi
       - name: Verify release APKs
+        if: github.event_name != 'pull_request'
         id: verify_apks
         run: |
           set -euo pipefail
@@ -102,16 +140,16 @@ jobs:
               echo "$badging" | head
               exit 1
             }
-            grep -q "versionName='1.0.2'" <<<"$badging" || {
+            grep -q "versionName='$APP_VERSION'" <<<"$badging" || {
               echo "versionName mismatch for $apk"
               echo "$badging" | head
               exit 1
             }
             abi="$(sed -n "s/.*native-code: '\([^']*\)'.*/\1/p" <<<"$badging" | awk 'NF{print; exit}')"
             case "$abi" in
-              armeabi-v7a) expected_code=301 ;;
-              arm64-v8a) expected_code=302 ;;
-              x86_64) expected_code=304 ;;
+              armeabi-v7a) expected_code="$((APP_VERSION_CODE * 100 + 1))" ;;
+              arm64-v8a) expected_code="$((APP_VERSION_CODE * 100 + 2))" ;;
+              x86_64) expected_code="$((APP_VERSION_CODE * 100 + 4))" ;;
               *) echo "unexpected ABI: [$abi]"; echo "$badging" | grep native-code; exit 1 ;;
             esac
             grep -q "versionCode='$expected_code'" <<<"$badging"
@@ -123,7 +161,7 @@ jobs:
             fi
             seen_abis+=("$abi")
             unzip -t "$apk" >/dev/null
-            cp "$apk" "release-apks/aves-media-enhanced-1.0.2-$abi.apk"
+            cp "$apk" "release-apks/aves-media-enhanced-$APP_VERSION-$abi.apk"
           done
           test "$(printf '%s\n' "${seen_abis[@]}" | sort -u | wc -l)" -eq 3
           (cd release-apks && sha256sum *.apk > SHA256SUMS.txt)
@@ -131,13 +169,14 @@ jobs:
         if: always()
         run: rm -f "$RUNNER_TEMP/aves-media-enhanced.jks"
       - name: Upload raw APKs for failed verification
-        if: failure() && steps.verify_apks.conclusion == 'failure'
+        if: github.event_name != 'pull_request' && failure() && steps.verify_apks.conclusion == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: aves-media-enhanced-verification-failure
           path: build/app/outputs/apk/libre/release/*.apk
           if-no-files-found: error
       - name: Upload signed release APKs
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: aves-media-enhanced-release

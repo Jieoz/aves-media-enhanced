@@ -83,6 +83,24 @@ void main() {
     expect(source.allEntries.length, 1);
   });
 
+  test('full reload waits for the initial media stream to finish', () async {
+    final fake = mediaStoreService as FakeMediaStoreService;
+    fake
+      ..entries = {FakeMediaStoreService.newImage(testAlbum, 'image1', id: -1, contentId: 1)}
+      ..entryStreamLatency = const Duration(milliseconds: 100);
+
+    final source = MediaStoreSource();
+    unawaited(source.init(scope: CollectionSource.fullScope));
+    await Future.delayed(const Duration(milliseconds: 10));
+    // A real MediaStore query creates fresh entry objects on each stream.
+    fake.entries = {FakeMediaStoreService.newImage(testAlbum, 'image1', id: -1, contentId: 1)};
+    await source.reloadAll();
+
+    expect(fake.maxActiveEntryStreams, 1);
+    expect(source.allEntries.length, 1);
+    expect(source.isReady, isTrue);
+  });
+
   test('album/country/tag hidden on launch when their items are hidden by entry prop', () async {
     settings.hiddenFilters = {StoredAlbumFilter(testAlbum, 'whatever')};
 

@@ -194,7 +194,7 @@ object MimeTypes {
 
     private fun normalizeExtension(ext: String?): String? {
         if (ext.isNullOrBlank()) return null
-        val trimmed = ext.trim().trimStart('.')
+        val trimmed = ext.trim().trimStart('.').lowercase()
         if (trimmed.isEmpty()) return null
         return ".$trimmed"
     }

@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## Aves Media Enhanced 1.0.3 - 2026-08-18
+
+### Fixed
+
+- serialized full library reloads and incremental MediaStore refreshes so they cannot overwrite each other
+- awaited the complete MediaStore entry stream before reporting a reload as complete
+- required mounted-volume and readable-directory proof before a missing MediaStore ID or path can delete a catalog record
+- replaced `DATA`-based move detection with volume identity, `RELATIVE_PATH`, and `DISPLAY_NAME` on Android 10 and newer
+- removed broad `DATA`-based MediaStore deletion after file moves
+- replaced blocking MediaScanner retry sleeps with cancellable suspending delays
+- kept original filename extensions when MediaStore reports an incorrect `video/mp2t` MIME type
+
+### Build
+
+- pinned CI to the repository Flutter submodule and committed Gradle wrapper
+- added Flutter tests, Android reconciliation policy tests, source contracts, and dynamic APK version verification
+- isolated signing secrets from pull-request jobs and pinned the official Gradle wrapper/distribution checksums
+
 ## <a id="unreleased"></a>[Unreleased]
 
 ### Changed
