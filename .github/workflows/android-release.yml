@@ -170,14 +170,14 @@ jobs:
         run: rm -f "$RUNNER_TEMP/aves-media-enhanced.jks"
       - name: Upload raw APKs for failed verification
         if: github.event_name != 'pull_request' && failure() && steps.verify_apks.conclusion == 'failure'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aves-media-enhanced-verification-failure
           path: build/app/outputs/apk/libre/release/*.apk
           if-no-files-found: error
       - name: Upload signed release APKs
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aves-media-enhanced-release
           path: release-apks/*
