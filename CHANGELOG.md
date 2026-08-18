@@ -8,8 +8,8 @@ All notable changes to this project will be documented in this file.
 
 - serialized full library reloads and incremental MediaStore refreshes so they cannot overwrite each other
 - awaited the complete MediaStore entry stream before reporting a reload as complete
-- stopped treating an unmounted or unavailable storage volume as proof that all of its files were deleted
-- replaced `DATA`-based move detection with `RELATIVE_PATH` and `DISPLAY_NAME` on Android 10 and newer
+- required mounted-volume and readable-directory proof before a missing MediaStore ID or path can delete a catalog record
+- replaced `DATA`-based move detection with volume identity, `RELATIVE_PATH`, and `DISPLAY_NAME` on Android 10 and newer
 - removed broad `DATA`-based MediaStore deletion after file moves
 - replaced blocking MediaScanner retry sleeps with cancellable suspending delays
 - kept original filename extensions when MediaStore reports an incorrect `video/mp2t` MIME type
@@ -18,6 +18,7 @@ All notable changes to this project will be documented in this file.
 
 - pinned CI to the repository Flutter submodule and committed Gradle wrapper
 - added Flutter tests, Android reconciliation policy tests, source contracts, and dynamic APK version verification
+- isolated signing secrets from pull-request jobs and pinned the official Gradle wrapper/distribution checksums
 
 ## <a id="unreleased"></a>[Unreleased]
 

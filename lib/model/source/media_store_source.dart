@@ -149,12 +149,11 @@ class MediaStoreSource extends CollectionSource {
 
     debugPrint('$runtimeType load ${stopwatch.elapsed} check obsolete entries');
     final knownDateByContentId = Map.fromEntries(knownLiveEntries.map((entry) => MapEntry(entry.contentId, entry.dateModifiedMillis)));
-    final knownContentIds = knownDateByContentId.keys.toList();
-    final removedContentIds = (await mediaStoreService.checkObsoleteContentIds(knownContentIds)).toSet();
+    final knownPathByContentId = Map.fromEntries(knownLiveEntries.map((entry) => MapEntry(entry.contentId, entry.path)));
+    final removedContentIds = (await mediaStoreService.checkObsoleteContentIds(knownPathByContentId)).toSet();
     // also drop entries whose file no longer exists on disk (e.g. deleted by another
     // app). Media Store may not have noticed the deletion yet, so the content-id check
     // above would miss it. Entries without a known path are skipped harmlessly.
-    final knownPathByContentId = Map.fromEntries(knownLiveEntries.map((entry) => MapEntry(entry.contentId, entry.path)));
     final missingPathIds = (await mediaStoreService.checkObsoleteByPath(knownPathByContentId)).toSet();
     removedContentIds.addAll(missingPathIds);
     if (topEntries.isNotEmpty) {
@@ -351,7 +350,10 @@ class MediaStoreSource extends CollectionSource {
     );
 
     // clean up obsolete entries
-    final obsoleteContentIds = (await mediaStoreService.checkObsoleteContentIds(changedUriByContentId.keys.toList())).toSet();
+    final changedPathByContentId = Map.fromEntries(
+      changedUriByContentId.keys.map((contentId) => MapEntry(contentId, allEntries.firstWhereOrNull((entry) => entry.contentId == contentId)?.path)),
+    );
+    final obsoleteContentIds = (await mediaStoreService.checkObsoleteContentIds(changedPathByContentId)).toSet();
     final obsoleteUris = obsoleteContentIds.map((contentId) => changedUriByContentId[contentId]).nonNulls.toSet();
     await removeEntries(obsoleteUris, includeTrash: false);
     obsoleteContentIds.forEach(changedUriByContentId.remove);

@@ -26,15 +26,23 @@ def main() -> None:
     assert "cont.isActive" in scan
     assert "runBlocking" not in KOTLIN
 
-    missing = section(KOTLIN, "fun checkObsoleteByMissingPath", "fun checkObsoletePaths")
-    assert "getExternalStorageState" in missing
-    assert "isReadableStorageState" in missing
+    missing_ids = section(KOTLIN, "fun checkObsoleteContentIds", "fun checkObsoleteByMissingPath")
+    missing_paths = section(KOTLIN, "fun checkObsoleteByMissingPath", "fun checkObsoletePaths")
+    assert "isDefinitelyMissing" in missing_ids
+    assert "isDefinitelyMissing" in missing_paths
+    assert "getExternalStorageState" in KOTLIN
+    assert "isDefinitelyMissing" in POLICY
     assert "MEDIA_MOUNTED" in POLICY
     assert "MEDIA_MOUNTED_READ_ONLY" in POLICY
 
     obsolete_paths = section(KOTLIN, "fun checkObsoletePaths", "fun getChangedUris")
     assert "RELATIVE_PATH" in obsolete_paths
     assert "DISPLAY_NAME" in obsolete_paths
+    assert "VOLUME_NAME" in obsolete_paths
+    assert "volumeMatches" in obsolete_paths
+
+    obsolete_scan = section(KOTLIN, "private fun scanObsoletePath", "private fun clearStaleSourceEntry")
+    assert "delayedExecutor" not in obsolete_scan
 
     assert "deleteMediaStoreRowByPath" not in KOTLIN
     print("media reconciliation source contracts: PASS")

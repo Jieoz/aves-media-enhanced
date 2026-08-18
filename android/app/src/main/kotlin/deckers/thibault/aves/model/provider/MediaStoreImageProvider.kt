@@ -44,7 +44,6 @@ import java.io.OutputStream
 import java.io.SyncFailedException
 import java.util.Locale
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 
 class MediaStoreImageProvider : ImageProvider() {
@@ -125,7 +124,7 @@ class MediaStoreImageProvider : ImageProvider() {
         }
     }
 
-    fun checkObsoleteContentIds(context: Context, knownContentIds: List<Long?>): List<Long> {
+    fun checkObsoleteContentIds(context: Context, knownPathById: Map<Long?, String?>): List<Long> {
         val foundContentIds = HashSet<Long>()
         var queryFailed = false
         fun check(context: Context, contentUri: Uri) {
@@ -151,12 +150,28 @@ class MediaStoreImageProvider : ImageProvider() {
         // A failed or null query must not be treated as "every known id is gone".
         // The difference against an empty found-set would wipe the whole catalog.
         if (queryFailed) return emptyList()
-        return knownContentIds.subtract(foundContentIds).filterNotNull().toList()
+        return knownPathById.keys
+            .subtract(foundContentIds)
+            .filterNotNull()
+            .filter { id -> knownPathById[id]?.let { isDefinitelyMissing(it) } == true }
+    }
+
+    private fun isDefinitelyMissing(path: String): Boolean = try {
+        val file = File(path)
+        val parent = file.parentFile
+        MediaStoreReconciliationPolicy.isDefinitelyMissing(
+            storageState = Environment.getExternalStorageState(file),
+            parentExists = parent?.exists() == true,
+            parentCanRead = parent?.canRead() == true,
+            fileExists = file.exists(),
+        )
+    } catch (_: Exception) {
+        false
     }
 
     // Return the content ids whose backing file no longer exists on disk. This catches
-    // entries deleted by other apps that Media Store has not indexed away yet, which
-    // `checkObsoleteContentIds` (based purely on content ids) would otherwise miss.
+    // entries deleted by other apps that Media Store has not indexed away yet. This
+    // complements the missing-ID check, which now also requires path-level proof before removal.
     // Entries without a known path are skipped (we cannot tell whether the file is gone).
     // We only trust this when the app has All-files access: without it the stored paths
     // are unreliable, so a missing path must not be taken as proof the file is gone.
@@ -167,25 +182,7 @@ class MediaStoreImageProvider : ImageProvider() {
         val obsoleteIds = ArrayList<Long>()
         for ((id, path) in knownPathById) {
             if (id == null || path.isNullOrBlank()) continue
-            try {
-                val file = File(path)
-                val storageState = Environment.getExternalStorageState(file)
-                if (!MediaStoreReconciliationPolicy.isReadableStorageState(storageState)) {
-                    // An unavailable/unmounted volume is not proof that every file on it was deleted.
-                    continue
-                }
-                val parent = file.parentFile
-                // An unreadable parent (unmounted volume, encoding, transient IO)
-                // is not proof the file is gone. Only treat as missing when we
-                // can actually inspect the directory, or the directory itself
-                // has been deleted.
-                if (parent != null && parent.exists() && !parent.canRead()) continue
-                if (!file.exists()) {
-                    obsoleteIds.add(id)
-                }
-            } catch (_: Exception) {
-                // A path we cannot stat is not obsolete.
-            }
+            if (isDefinitelyMissing(path)) obsoleteIds.add(id)
         }
         return obsoleteIds
     }
@@ -200,6 +197,7 @@ class MediaStoreImageProvider : ImageProvider() {
                     MediaStore.MediaColumns._ID,
                     MediaStore.MediaColumns.RELATIVE_PATH,
                     MediaStore.MediaColumns.DISPLAY_NAME,
+                    MediaStore.MediaColumns.VOLUME_NAME,
                 )
             } else {
                 arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DATA)
@@ -214,13 +212,16 @@ class MediaStoreImageProvider : ImageProvider() {
                 val pathColumn = if (useRelativePath) -1 else cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
                 val relativePathColumn = if (useRelativePath) cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH) else -1
                 val displayNameColumn = if (useRelativePath) cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME) else -1
+                val volumeNameColumn = if (useRelativePath) cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.VOLUME_NAME) else -1
                 while (cursor.moveToNext()) {
                     val id = cursor.getLong(idColumn)
                     val knownPath = knownPathById[id] ?: continue
                     val moved = if (useRelativePath) {
                         val relativePath = cursor.getString(relativePathColumn)
                         val displayName = cursor.getString(displayNameColumn)
-                        MediaStoreReconciliationPolicy.pathMatches(knownPath, relativePath, displayName) == false
+                        val volumeName = cursor.getString(volumeNameColumn)
+                        MediaStoreReconciliationPolicy.pathMatches(knownPath, relativePath, displayName) == false ||
+                            MediaStoreReconciliationPolicy.volumeMatches(knownPath, volumeName) == false
                     } else {
                         // DATA is used only on pre-scoped-storage Android versions.
                         val path = cursor.getString(pathColumn)
@@ -1060,20 +1061,10 @@ class MediaStoreImageProvider : ImageProvider() {
         return null
     }
 
-    private fun scanObsoletePath(context: Context, uri: Uri, path: String, mimeType: String, attempt: Int = 0) {
+    private fun scanObsoletePath(context: Context, uri: Uri, path: String, mimeType: String) {
         val file = File(path)
-        val delayMillis = 500L
-        val maxAttempts = 20
         if (file.exists()) {
-            if (!hasEntry(context, uri)) return
-            if (attempt >= maxAttempts) {
-                Log.w(LOG_TAG, "Timed out waiting to scan obsolete path=$path after ${maxAttempts * delayMillis} ms")
-                return
-            }
-            Log.d(LOG_TAG, "Trying to scan obsolete path but file exists at path=$path. Scheduling retry ${attempt + 1}/$maxAttempts")
-            CompletableFuture.delayedExecutor(delayMillis, TimeUnit.MILLISECONDS).execute {
-                scanObsoletePath(context, uri, path, mimeType, attempt + 1)
-            }
+            Log.w(LOG_TAG, "Skip obsolete-path scan because the file still exists at path=$path")
             return
         }
 

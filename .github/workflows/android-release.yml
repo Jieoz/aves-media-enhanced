@@ -64,6 +64,7 @@ jobs:
           test -f ../lib/main_libre.dart
           ./gradlew testLibreDebugUnitTest -Ptarget=lib/main_libre.dart --stacktrace --no-daemon
       - name: Decode release keystore
+        if: github.event_name != 'pull_request'
         env:
           AVES_KEYSTORE_BASE64: ${{ secrets.AVES_KEYSTORE_BASE64 }}
         run: |
@@ -71,6 +72,7 @@ jobs:
           printf '%s' "$AVES_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/aves-media-enhanced.jks"
           test -s "$RUNNER_TEMP/aves-media-enhanced.jks"
       - name: Build signed split release APKs
+        if: github.event_name != 'pull_request'
         env:
           AVES_STORE_FILE: ${{ runner.temp }}/aves-media-enhanced.jks
           AVES_STORE_PASSWORD: ${{ secrets.AVES_STORE_PASSWORD }}
@@ -79,6 +81,7 @@ jobs:
           AVES_GOOGLE_API_KEY: NONE
         run: flutter build apk --release -t lib/main_libre.dart --flavor libre --split-per-abi
       - name: Verify release APKs
+        if: github.event_name != 'pull_request'
         id: verify_apks
         run: |
           set -euo pipefail
@@ -166,13 +169,14 @@ jobs:
         if: always()
         run: rm -f "$RUNNER_TEMP/aves-media-enhanced.jks"
       - name: Upload raw APKs for failed verification
-        if: failure() && steps.verify_apks.conclusion == 'failure'
+        if: github.event_name != 'pull_request' && failure() && steps.verify_apks.conclusion == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: aves-media-enhanced-verification-failure
           path: build/app/outputs/apk/libre/release/*.apk
           if-no-files-found: error
       - name: Upload signed release APKs
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: aves-media-enhanced-release
