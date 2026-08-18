@@ -110,7 +110,9 @@ class MappedGeoTiff with MapOverlay {
     } catch (error) {
       debugPrint('failed to get image for region=$region with error=$error');
     }
-    imageStream.removeListener(imageStreamListener);
+    finally {
+      imageStream.removeListener(imageStreamListener);
+    }
 
     final imageOffset = Offset(
       regionLeft > tileLeft ? (regionLeft - tileLeft).toDouble() : 0,
@@ -143,6 +145,7 @@ class MappedGeoTiff with MapOverlay {
 
     final picture = recorder.endRecording();
     final tileImage = await picture.toImage(_mapServiceTileSize, _mapServiceTileSize);
+    regionImageInfo?.dispose();
     picture.dispose();
 
     final imageData = await tileImage.toByteData(format: ui.ImageByteFormat.png);

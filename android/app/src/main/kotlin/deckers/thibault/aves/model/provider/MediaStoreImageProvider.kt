@@ -1,5 +1,6 @@
 package deckers.thibault.aves.model.provider
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.RecoverableSecurityException
@@ -14,6 +15,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.content.pm.PackageManager
 import android.util.Log
 import androidx.annotation.RequiresApi
 import com.commonsware.cwac.document.DocumentFileCompat
@@ -125,6 +127,11 @@ class MediaStoreImageProvider : ImageProvider() {
     }
 
     fun checkObsoleteContentIds(context: Context, knownPathById: Map<Long?, String?>): List<Long> {
+        // Android 14's selected-photos access produces an intentionally
+        // incomplete MediaStore view. Missing IDs are not deletion evidence.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !hasCompleteVisualMediaAccess(context)) {
+            return emptyList()
+        }
         val foundContentIds = HashSet<Long>()
         var queryFailed = false
         fun check(context: Context, contentUri: Uri) {
@@ -154,6 +161,12 @@ class MediaStoreImageProvider : ImageProvider() {
             .subtract(foundContentIds)
             .filterNotNull()
             .filter { id -> knownPathById[id]?.let { isDefinitelyMissing(it) } == true }
+    }
+
+    private fun hasCompleteVisualMediaAccess(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+        return context.checkSelfPermission(Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED &&
+            context.checkSelfPermission(Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
     }
 
     private fun isDefinitelyMissing(path: String): Boolean = try {

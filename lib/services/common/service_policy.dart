@@ -27,6 +27,21 @@ class ServicePolicy {
     Completer<T> taskCompleter;
     _Task<T> task;
     key ??= platformCall.hashCode;
+
+    // A running task is the canonical work for this key. Share its Future
+    // instead of replacing the running-map entry and orphaning its cleanup.
+    final runningTask = _runningQueue[key];
+    if (runningTask != null) {
+      return (runningTask.completer as Completer<T>).future;
+    }
+
+    // A queued task with the same key is superseded explicitly. Never leave
+    // its caller waiting on a completer that is no longer reachable.
+    for (final queue in _queues.values) {
+      final replaced = queue.remove(key);
+      replaced?.completer.completeError(CancelledException());
+    }
+
     final toResume = _paused.remove(key);
     if (toResume != null) {
       priority = toResume.$1;

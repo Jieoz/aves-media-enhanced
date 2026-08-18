@@ -221,8 +221,8 @@ class DebugHandler(private val context: Context) : MethodCallHandler {
     }
 
     private fun getContentResolverMetadataForUri(contentUri: Uri): FieldMap? {
-        val cursor = context.contentResolver.query(contentUri, null, null, null, null)
-        if (cursor != null && cursor.moveToFirst()) {
+        context.contentResolver.query(contentUri, null, null, null, null)?.use { cursor ->
+            if (!cursor.moveToFirst()) return null
             val metadataMap = HashMap<String, Any?>()
             val columnCount = cursor.columnCount
             val columnNames = cursor.columnNames
@@ -241,7 +241,6 @@ class DebugHandler(private val context: Context) : MethodCallHandler {
                     Log.w(LOG_TAG, "failed to get value for key=$key", e)
                 }
             }
-            cursor.close()
             return metadataMap
         }
         return null

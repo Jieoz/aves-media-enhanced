@@ -6,6 +6,7 @@ import 'package:aves/model/db/db_sqflite_schema.dart';
 import 'package:aves/model/db/db_sqflite_upgrade.dart';
 import 'package:aves/model/dynamic_albums.dart';
 import 'package:aves/model/entry/entry.dart';
+import 'package:aves/model/entry/origins.dart';
 import 'package:aves/model/favourites.dart';
 import 'package:aves/model/filters/filters.dart';
 import 'package:aves/model/metadata/address.dart';
@@ -126,8 +127,12 @@ class SqfliteLocalMediaDb implements LocalMediaDb {
         directory = '$directory$separator';
       }
 
-      where = '${where != null ? '$where AND ' : ''}path LIKE ?';
-      whereArgs.add('$directory%');
+      final escapedDirectory = directory
+          .replaceAll('\\', '\\\\')
+          .replaceAll('%', '\\%')
+          .replaceAll('_', '\\_');
+      where = '${where != null ? '$where AND ' : ''}path LIKE ? ESCAPE \'\\\'';
+      whereArgs.add('$escapedDirectory%');
       final cursor = await _db.queryCursor(entryTable, where: where, whereArgs: whereArgs, bufferSize: _queryCursorBufferSize);
 
       final dirLength = directory.length;
@@ -188,8 +193,8 @@ class SqfliteLocalMediaDb implements LocalMediaDb {
   Future<Set<AvesEntry>> searchLiveEntries(String query, {int? limit}) async {
     final rows = await _db.query(
       entryTable,
-      where: '(title LIKE ? OR path LIKE ?) AND trashed = ?',
-      whereArgs: ['%$query%', '%$query%', 0],
+      where: '(title LIKE ? OR path LIKE ?) AND trashed = ? AND origin != ?',
+      whereArgs: ['%$query%', '%$query%', 0, EntryOrigins.vault],
       orderBy: 'sourceDateTakenMillis DESC',
       limit: limit,
     );

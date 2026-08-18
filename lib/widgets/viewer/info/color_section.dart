@@ -97,6 +97,9 @@ class _ColorSectionSliverState extends State<ColorSectionSliver> {
     listener = ImageStreamListener((info, _) {
       stream.removeListener(listener);
       imageInfoCompleter.complete(info);
+    }, onError: (error, stack) {
+      stream.removeListener(listener);
+      imageInfoCompleter.completeError(error, stack);
     });
 
     stream.addListener(listener);

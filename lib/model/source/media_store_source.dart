@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:aves/model/covers.dart';
 import 'package:aves/model/dynamic_albums.dart';
@@ -368,7 +369,8 @@ class MediaStoreSource extends CollectionSource {
     const _maxConcurrentFetch = 6;
     final uriItems = changedUriByContentId.entries.toList();
     for (var i = 0; i < uriItems.length; i += _maxConcurrentFetch) {
-      final chunk = uriItems.sublist(i, i + _maxConcurrentFetch);
+      final end = min(i + _maxConcurrentFetch, uriItems.length);
+      final chunk = uriItems.sublist(i, end);
       final fetched = await Future.wait(chunk.map((kv) => mediaFetchService.getEntry(kv.value, null)));
       for (var j = 0; j < chunk.length; j++) {
         final contentId = chunk[j].key;
@@ -469,10 +471,16 @@ class MediaStoreSource extends CollectionSource {
   Future<void> checkForChanges() async {
     final sinceGeneration = _lastGeneration;
     if (sinceGeneration != null) {
+      // Capture an upper watermark before querying changes. Changes arriving
+      // after this read remain eligible for the next pass instead of being
+      // skipped by committing a newer watermark after the query.
+      final upperGeneration = await mediaStoreService.getGeneration();
       _changedUris.addAll(await mediaStoreService.getChangedUris(sinceGeneration));
       onStoreChanged(null);
+      _lastGeneration = upperGeneration;
+    } else {
+      await updateGeneration();
     }
-    await updateGeneration();
   }
 
   Future<void> updateGeneration() async {

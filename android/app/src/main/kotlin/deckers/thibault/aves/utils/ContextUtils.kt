@@ -39,19 +39,20 @@ object ContextUtils {
         var value: Any? = null
         try {
             val cursor = contentResolver.query(contentUri, arrayOf(column), null, null, null)
-            if (cursor == null || !cursor.moveToFirst()) {
-                Log.w(LOG_TAG, "failed to get cursor for contentUri=$contentUri column=$column")
-            } else {
-                value = when (cursor.getType(0)) {
+            cursor?.use { c ->
+                if (!c.moveToFirst()) {
+                    Log.w(LOG_TAG, "failed to get cursor for contentUri=$contentUri column=$column")
+                    return@use
+                }
+                value = when (c.getType(0)) {
                     Cursor.FIELD_TYPE_NULL -> null
-                    Cursor.FIELD_TYPE_INTEGER -> cursor.getLong(0)
-                    Cursor.FIELD_TYPE_FLOAT -> cursor.getFloat(0)
-                    Cursor.FIELD_TYPE_STRING -> cursor.getString(0)
-                    Cursor.FIELD_TYPE_BLOB -> cursor.getBlob(0)
+                    Cursor.FIELD_TYPE_INTEGER -> c.getLong(0)
+                    Cursor.FIELD_TYPE_FLOAT -> c.getFloat(0)
+                    Cursor.FIELD_TYPE_STRING -> c.getString(0)
+                    Cursor.FIELD_TYPE_BLOB -> c.getBlob(0)
                     else -> null
                 }
-                cursor.close()
-            }
+            } ?: Log.w(LOG_TAG, "failed to get cursor for contentUri=$contentUri column=$column")
         } catch (e: Exception) {
             // throws SQLiteException/IllegalArgumentException when the requested prop is not a known column
             Log.w(LOG_TAG, "failed to get value for contentUri=$contentUri column=$column", e)

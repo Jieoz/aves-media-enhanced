@@ -4,6 +4,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DART = (ROOT / "lib/model/source/media_store_source.dart").read_text()
+DB_DART = (ROOT / "lib/model/db/db_sqflite.dart").read_text()
+SERVICE_POLICY = (ROOT / "lib/services/common/service_policy.dart").read_text()
+GLOBAL_SEARCH = (ROOT / "lib/services/global_search.dart").read_text()
 KOTLIN = (ROOT / "android/app/src/main/kotlin/deckers/thibault/aves/model/provider/MediaStoreImageProvider.kt").read_text()
 POLICY = (ROOT / "android/app/src/main/kotlin/deckers/thibault/aves/model/provider/MediaStoreReconciliationPolicy.kt").read_text()
 
@@ -45,6 +48,28 @@ def main() -> None:
     assert "delayedExecutor" not in obsolete_scan
 
     assert "deleteMediaStoreRowByPath" not in KOTLIN
+
+    # External global search must never expose vault rows.
+    assert "origin != ?" in DB_DART
+    assert "EntryOrigins.vault" in DB_DART
+    assert "ESCAPE" in DB_DART
+    assert "replaceAll('%', '\\\\%')" in DB_DART
+    assert "searchLiveEntries(query, limit: 9)" in GLOBAL_SEARCH
+
+    # Android 14 partial photo access must fail closed for missing IDs.
+    assert "READ_MEDIA_IMAGES" in KOTLIN
+    assert "READ_MEDIA_VIDEO" in KOTLIN
+    assert "UPSIDE_DOWN_CAKE" in KOTLIN
+
+    # Refresh batches must clamp the final sublist boundary.
+    assert "min(i + _maxConcurrentFetch, uriItems.length)" in DART
+    changes = section(DART, "Future<void> checkForChanges()", "Future<void> updateGeneration()")
+    assert changes.index("getGeneration()") < changes.index("getChangedUris")
+    assert "_lastGeneration = upperGeneration" in changes
+
+    # Queued same-key requests must not strand the replaced completer.
+    assert "completeError(CancelledException" in SERVICE_POLICY
+
     print("media reconciliation source contracts: PASS")
 
 
