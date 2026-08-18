@@ -62,7 +62,7 @@ jobs:
         working-directory: android
         run: |
           test -f ../lib/main_libre.dart
-          ./gradlew testLibreDebugUnitTest -Ptarget=../lib/main_libre.dart --stacktrace --no-daemon
+          ./gradlew testLibreDebugUnitTest -Ptarget=lib/main_libre.dart --stacktrace --no-daemon
       - name: Decode release keystore
         env:
           AVES_KEYSTORE_BASE64: ${{ secrets.AVES_KEYSTORE_BASE64 }}
