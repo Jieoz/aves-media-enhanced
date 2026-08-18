@@ -247,6 +247,7 @@ dependencies {
     implementation(project(":exifinterface"))
 
     testImplementation(libs.junit)
+    testRuntimeOnly(libs.junit.platform.launcher)
 
     ksp(libs.glideKsp)
 
