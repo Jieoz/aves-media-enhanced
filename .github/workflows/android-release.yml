@@ -20,13 +20,20 @@ jobs:
           submodules: recursive
       - name: Use repository-pinned Flutter SDK
         run: |
+          set -euo pipefail
           test -x "$GITHUB_WORKSPACE/.flutter/bin/flutter"
+          # actions/checkout fetches submodules at depth 1 without tags. Flutter
+          # then identifies this exact tagged revision as 0.0.0-unknown, which
+          # makes pub reject this repository's minimum SDK constraint.
+          git -C "$GITHUB_WORKSPACE/.flutter" fetch --force --depth=1 origin tag 3.47.0-0.3.pre
+          test "$(git -C "$GITHUB_WORKSPACE/.flutter" describe --tags --exact-match HEAD)" = '3.47.0-0.3.pre'
           echo "$GITHUB_WORKSPACE/.flutter/bin" >> "$GITHUB_PATH"
           if ! "$GITHUB_WORKSPACE/.flutter/bin/flutter" --version; then
             # Some archive/filesystem combinations lose executable bits.
             python3 scripts/repair_flutter_cache_permissions.py "$GITHUB_WORKSPACE/.flutter"
             "$GITHUB_WORKSPACE/.flutter/bin/flutter" --version
           fi
+          test "$("$GITHUB_WORKSPACE/.flutter/bin/flutter" --version --machine | python3 -c 'import json,sys; print(json.load(sys.stdin)["frameworkVersion"] )')" = '3.47.0-0.3.pre'
           "$GITHUB_WORKSPACE/.flutter/bin/flutter" config --no-analytics
           "$GITHUB_WORKSPACE/.flutter/bin/flutter" precache --android --linux
           python3 scripts/repair_flutter_cache_permissions.py "$GITHUB_WORKSPACE/.flutter"
